@@ -522,6 +522,16 @@ pub struct FILE_RENAME_INFORMATION_EX {
     pub FileName: [u16; 1],
 }
 
+/// Legacy `FILE_RENAME_INFORMATION` (`ntifs.h`), supported on all Windows
+/// versions including XP. `FileName` is a variable-length tail.
+#[repr(C)]
+pub struct FILE_RENAME_INFORMATION {
+    pub ReplaceIfExists: BOOLEAN,
+    pub RootDirectory: HANDLE,
+    pub FileNameLength: ULONG,
+    pub FileName: [u16; 1],
+}
+
 // `FILE_DISPOSITION_INFORMATION_EX.Flags` bits (winnt.h).
 pub const FILE_DISPOSITION_DELETE: ULONG = 0x0000_0001;
 pub const FILE_DISPOSITION_POSIX_SEMANTICS: ULONG = 0x0000_0002;

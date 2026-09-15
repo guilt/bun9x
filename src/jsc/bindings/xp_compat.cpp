@@ -397,7 +397,9 @@ DWORD __stdcall GetFinalPathNameByHandleW(HANDLE hFile, LPWSTR lpszFilePath, DWO
     // Map the longest matching volume device prefix to a drive letter.
     size_t best = 0;
     WCHAR bestLetter = 0;
-    if (ntlen >= 2 && nt[0] == L'\\' && nt[1] == L'\\') {
+    // NtQueryObject returns device names with a SINGLE leading backslash
+    // (`\Device\HarddiskVolume1\...`) on XP; accept either one or two.
+    if (ntlen >= 1 && nt[0] == L'\\') {
         // NT device names are "\Device\...".
         for (WCHAR d = L'A'; d <= L'Z'; ++d) {
             WCHAR drv[4] = { d, L':', 0, 0 };
@@ -455,7 +457,8 @@ DWORD __stdcall GetFinalPathNameByHandleW(HANDLE hFile, LPWSTR lpszFilePath, DWO
         memcpy(out + 2, rest, restlen * sizeof(WCHAR));
         out[2 + restlen] = 0;
         free(info);
-        return (DWORD)neededLen;
+        // GetFinalPathNameByHandleW returns the length EXCLUDING the NUL.
+        return (DWORD)neededLen - 1;
     }
 
     // UNC or unmapped volume: spell "\\server\share\..." from the NT name if

@@ -4884,21 +4884,19 @@ pub fn move_opened_file_at(
     // trailing FileName write extends past size_of::<FILE_RENAME_INFORMATION_EX>() and a &mut
     // reborrow would shrink provenance to just the struct, making that write UB. The buffer is
     // uniquely owned on this stack frame, so no aliasing is possible.
-    let rename_info: *mut win32::FILE_RENAME_INFORMATION_EX = rename_info_buf.as_mut_ptr().cast();
+    // NOTE: the legacy FILE_RENAME_INFORMATION (class 10) is used instead of the Ex variant
+    // because FileRenameInformationEx / FILE_RENAME_POSIX_SEMANTICS require Win10 rs1+ and
+    // NtSetInformationFile fails with STATUS_INVALID_PARAMETER on Windows XP.
+    let rename_info: *mut win32::FILE_RENAME_INFORMATION = rename_info_buf.as_mut_ptr().cast();
     let mut io_status_block: win32::IO_STATUS_BLOCK = bun_core::ffi::zeroed();
 
-    let mut flags: ULONG =
-        win32::FILE_RENAME_POSIX_SEMANTICS | win32::FILE_RENAME_IGNORE_READONLY_ATTRIBUTE;
-    if replace_if_exists {
-        flags |= win32::FILE_RENAME_REPLACE_IF_EXISTS;
-    }
     // SAFETY: rename_info is aligned, non-null, and points into uninitialized storage we own;
     // ptr::write initializes the header without dropping prior (uninit) contents.
     unsafe {
         ptr::write(
             rename_info,
-            win32::FILE_RENAME_INFORMATION_EX {
-                Flags: flags,
+            win32::FILE_RENAME_INFORMATION {
+                ReplaceIfExists: replace_if_exists as win32::BOOLEAN,
                 RootDirectory: if bun_paths::is_absolute_windows_wtf16(new_file_name) {
                     ptr::null_mut()
                 } else {
@@ -4926,7 +4924,7 @@ pub fn move_opened_file_at(
             &mut io_status_block,
             rename_info.cast::<c_void>(),
             u32::try_from(struct_len).expect("int cast"), // already checked for error.NameTooLong
-            win32::FileInformationClass::FileRenameInformationEx,
+            win32::FileInformationClass::FileRenameInformation,
         )
     };
     bun_sys::syslog!(
