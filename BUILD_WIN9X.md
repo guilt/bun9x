@@ -757,6 +757,16 @@ WebKit from the build cache when not changing WebKit configuration.
 
 ## Troubleshooting
 
+### WebKit cmake configure: "undefined symbol: _mainCRTStartup" (i586)
+The x64 VS dev shell sets `LIB` to x64-only paths, so lld-link's
+`/machine:X86` try_compile can't find `libcmt` (x86) and a **fresh** WebKit
+configure fails. This was masked by a cached `CMakeCache.txt` from an older
+x86-LIB shell; the `--fresh` reconfigure exposes it. Fixed in
+`scripts/build/source.ts` `emitNestedCmake`: for `cfg.x86` cmake deps it
+prepends `cfg.windowsX86LibDirs` (the same dirs the bun link gets via
+`/libpath:`) to the configure/build `LIB` env, so configure works from any
+shell.
+
 ### Linker: "can't open 'Files\Microsoft'" or "no such file or directory: '/NOLOGO'"
 Paths with spaces need proper quoting. Also ensure the VS dev shell is
 NOT loaded for x86 (HostX64\x86) — use x64 shell to cross-compile.
