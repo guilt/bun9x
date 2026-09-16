@@ -1,0 +1,28 @@
+diff --git a/crypto/rand/windows.cc b/crypto/rand/windows.cc
+index ebd0d4a..3d79472 100644
+--- a/crypto/rand/windows.cc
++++ b/crypto/rand/windows.cc
+@@ -62,10 +62,20 @@ static ProcessPrngFunction g_processprng_fn = nullptr;
+ 
+ static void init_processprng() {
+   HMODULE hmod = LoadLibraryW(L"bcryptprimitives");
+-  if (hmod == nullptr) {
+-    abort();
++  if (hmod != nullptr) {
++    g_processprng_fn = (ProcessPrngFunction)GetProcAddress(hmod, "ProcessPrng");
++  }
++  if (g_processprng_fn == nullptr) {
++    // Windows XP: bcryptprimitives.dll (the Windows 8+ API set behind
++    // ProcessPrng) does not exist. Fall back to RtlGenRandom
++    // (SystemFunction036) from advapi32, which has the same signature and is
++    // present on all Windows versions.
++    HMODULE advapi = GetModuleHandleW(L"advapi32.dll");
++    if (advapi != nullptr) {
++      g_processprng_fn =
++          (ProcessPrngFunction)GetProcAddress(advapi, "SystemFunction036");
++    }
+   }
+-  g_processprng_fn = (ProcessPrngFunction)GetProcAddress(hmod, "ProcessPrng");
+   if (g_processprng_fn == nullptr) {
+     abort();
+   }
