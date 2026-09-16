@@ -758,6 +758,17 @@ void us_internal_socket_after_open(struct us_socket_t *s, int error) {
                     error = 0;
                     break;
                 }
+                case WSAEOPNOTSUPP: {
+                    /* MSG_PUSH_IMMEDIATE is Vista+. On XP recv() rejects the
+                     * flag with WSAEOPNOTSUPP, which would turn every
+                     * successful non-blocking connect into a spurious
+                     * failure. The flag is only an optimization to surface an
+                     * aborted connection immediately; on XP fall back to
+                     * assuming the connect succeeded (a plain 0-byte recv
+                     * would report WSAEWOULDBLOCK, handled above). */
+                    error = 0;
+                    break;
+                }
                 default: {
                     break;
                 }
