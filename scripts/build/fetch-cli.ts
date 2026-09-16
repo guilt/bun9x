@@ -28,6 +28,7 @@ import { basename, dirname, join, sep } from "node:path";
 import { downloadWithRetry, extractTarGz, fetchPrebuilt } from "./download.ts";
 import { BuildError, assert } from "./error.ts";
 import { writeIfChanged } from "./fs.ts";
+import { findPatch } from "./tools.ts";
 
 /**
  * Absolute path to this file. Ninja rules use this in their command strings.
@@ -250,23 +251,38 @@ function normalizeLf(s: string): string {
 }
 
 /**
- * Apply a patch via `git apply` over stdin.
+ * Apply a patch to a freshly-extracted dep source dir.
  *
- * Normalizes CRLF→LF (same as the identity hash — see computeSourceIdentity)
- * so a CRLF-mangled checkout still applies cleanly. --no-index: dest/ is
- * not a git repo. --ignore-whitespace / --ignore-space-change: patches are
- * authored against upstream which may have different trailing whitespace.
+ * Prefers GNU patch (`patch -p1`): `git apply --no-index` is broken on some
+ * Git-for-Windows releases (exits 0 without applying anything), which would
+ * silently build unpatched deps. GNU patch handles the standard `a/`/`b/`
+ * git-diff prefixes with `-p1` and reads the (CRLF→LF normalized) body over
+ * stdin, matching the identity hash in `computeSourceIdentity`. Falls back to
+ * `git apply --no-index` only when no GNU patch is available, and errors
+ * loudly on failure.
  */
 function applyPatch(dest: string, patchPath: string, patchBody: string): void {
-  const result = spawnSync("git", ["apply", "--ignore-whitespace", "--ignore-space-change", "--no-index", "-"], {
-    cwd: dest,
-    input: normalizeLf(patchBody),
-    stdio: ["pipe", "ignore", "pipe"],
-    encoding: "utf8",
-  });
+  const body = normalizeLf(patchBody);
+  const patch = findPatch();
+  let result;
+  if (patch) {
+    result = spawnSync(patch, ["-p1", "--batch"], {
+      cwd: dest,
+      input: body,
+      stdio: ["pipe", "ignore", "pipe"],
+      encoding: "utf8",
+    });
+  } else {
+    result = spawnSync("git", ["apply", "--ignore-whitespace", "--ignore-space-change", "--no-index", "-"], {
+      cwd: dest,
+      input: body,
+      stdio: ["pipe", "ignore", "pipe"],
+      encoding: "utf8",
+    });
+  }
 
   if (result.error) {
-    throw new BuildError(`Failed to spawn git apply`, { cause: result.error });
+    throw new BuildError(`Failed to spawn ${patch ? "patch" : "git apply"}`, { cause: result.error });
   }
 
   if (result.status !== 0) {
@@ -293,12 +309,24 @@ function applyLocalPatches(srcdir: string, stamp: string, patchPaths: string[]):
     const normalized = normalizeLf(body);
 
     // Check if already applied (reverse apply check passes → applied).
-    const check = spawnSync("git", ["apply", "-R", "--check", "--ignore-whitespace", "--ignore-space-change", "-"], {
-      cwd: srcdir,
-      input: normalized,
-      stdio: ["pipe", "ignore", "pipe"],
-      encoding: "utf8",
-    });
+    const patch = findPatch();
+    let check;
+    if (patch) {
+      // GNU patch: reverse dry-run succeeds iff the patch is already applied.
+      check = spawnSync(patch, ["-p1", "--batch", "-R", "--dry-run"], {
+        cwd: srcdir,
+        input: normalized,
+        stdio: ["pipe", "ignore", "pipe"],
+        encoding: "utf8",
+      });
+    } else {
+      check = spawnSync("git", ["apply", "-R", "--check", "--ignore-whitespace", "--ignore-space-change", "-"], {
+        cwd: srcdir,
+        input: normalized,
+        stdio: ["pipe", "ignore", "pipe"],
+        encoding: "utf8",
+      });
+    }
 
     if (check.status === 0) {
       console.log(`  (already applied) ${basename(p)}`);

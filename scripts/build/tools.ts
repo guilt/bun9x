@@ -699,6 +699,33 @@ export interface CargoToolchain {
 }
 
 /**
+ * Locate a GNU `patch` binary for applying unified diffs to vendored source.
+ *
+ * `git apply --no-index` is broken on some Git-for-Windows releases (it exits
+ * 0 without applying), so `fetch-cli.ts` uses GNU patch instead. Search the
+ * Git for Windows `usr/bin` locations (same roots as `findPerl`) and fall
+ * back to `patch` on PATH — but only if it's actually GNU patch (Beyond
+ * Compare's `Patch.exe` is not and would silently mis-apply). Not required;
+ * callers fall back to `git apply` when absent.
+ */
+export function findPatch(): string | undefined {
+  const paths: string[] = [];
+  for (const pf of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"], process.env.LocalAppData]) {
+    if (!pf) continue;
+    paths.push(join(pf, "Git", "usr", "bin"));
+    paths.push(join(pf, "Programs", "Git", "usr", "bin"));
+  }
+  const found = findTool({ names: ["patch"], paths, required: false })?.path;
+  if (!found) return undefined;
+  const ver = spawnSync(found, ["--version"], { encoding: "utf8" });
+  if (ver.status !== 0 || !/GNU patch/i.test(ver.stdout ?? "")) {
+    // Possibly Beyond Compare's Patch.exe shadowing PATH — not GNU patch.
+    return undefined;
+  }
+  return found;
+}
+
+/**
  * Locate rustc's bundled lld and its LLVM version.
  *
  * rustc ships its own copy of lld (built against the same LLVM rustc emits
