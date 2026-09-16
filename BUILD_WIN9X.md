@@ -485,8 +485,12 @@ patches are applied for every profile that builds the dep from source.
 - `build-icu-source.patch`, `makedata-filterfile.patch`,
   `makedata-skip-testdata.patch` — ICU data-build fixes
 
-`vendor-patches/libuv/`:
-- `win-ssize.patch` — `ssize_t` typedef (4-byte `intptr_t` on win32)
+`vendor-patches/boringssl/`:
+- `win9x-rtlgenrandom.patch` — BoringSSL's Windows RNG loads
+  `bcryptprimitives.dll` and calls `ProcessPrng` (a Windows 8+ API set). On XP
+  that DLL does not exist, so the first `rand_bytes()` call aborts/hangs
+  (observed during lockfile save). Falls back to `RtlGenRandom`
+  (`SystemFunction036`) from advapi32, present on all Windows versions.
 
 `vendor-patches/libjpeg-turbo/`:
 - `jcphuff-bitscan.patch` — guard `_BitScanForward64` intrinsics to `_WIN64`
