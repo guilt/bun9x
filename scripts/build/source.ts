@@ -1234,6 +1234,16 @@ function emitNestedCmake(
     ) {
       env = `--env=PATH=${quote(dirname(perl) + ";" + (process.env.PATH ?? ""), true)}`;
     }
+    // x86-target cmake deps (WebKit, ICU) need the x86 CRT/SDK import libs on
+    // LIB. The x64 VS dev shell sets LIB to x64-only paths, so lld-link's
+    // try_compile can't find libcmt (x86) → `_mainCRTStartup` undefined and
+    // a fresh configure fails. Prepending the x86 lib dirs (derived from the
+    // dev-shell env vars, same as the bun link /libpath:) makes configure
+    // succeed from any shell.
+    if (cfg.x86 && cfg.windowsX86LibDirs.length > 0) {
+      const libEnv = [...cfg.windowsX86LibDirs, process.env.LIB ?? ""].join(";");
+      env += (env ? " " : "") + `--env=LIB=${quote(libEnv, true)}`;
+    }
   }
 
   // cmake source dir (where CMakeLists.txt lives). Usually srcDir, but
