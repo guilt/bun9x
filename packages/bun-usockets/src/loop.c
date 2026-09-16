@@ -22,6 +22,24 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+
+#ifdef _WIN32
+/* MSG_PUSH_IMMEDIATE (0x20) is Vista+. On XP recv() rejects it with
+ * WSAEOPNOTSUPP, so every socket read fails and incoming data never arrives
+ * (fetch/install hangs after the connect). Detect the OS version once and
+ * fall back to MSG_DONTWAIT (supported on all Windows versions) on XP. */
+static int us_internal_recv_flags(void) {
+    static int flags = -1;
+    if (flags == -1) {
+        OSVERSIONINFOA vi;
+        vi.dwOSVersionInfoSize = sizeof(vi);
+        GetVersionExA(&vi);
+        flags = vi.dwMajorVersion >= 6 ? MSG_PUSH_IMMEDIATE : MSG_DONTWAIT;
+    }
+    return flags;
+}
+#endif
+
 #ifndef WIN32
 #include <sys/ioctl.h>
 #endif
@@ -668,7 +686,7 @@ void us_internal_dispatch_ready_poll(struct us_poll_t *p, int error, int eof, in
 
                 do {
                     #ifdef _WIN32
-                      const int recv_flags = MSG_PUSH_IMMEDIATE;
+                      const int recv_flags = us_internal_recv_flags();
                     #else
                       const int recv_flags = MSG_DONTWAIT;
                     #endif
