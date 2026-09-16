@@ -499,7 +499,11 @@ patches are applied for every profile that builds the dep from source.
 - `rtlgenrandom.patch` — XP-safe secure randomness in the direct mimalloc build
 
 These are applied automatically during the build (`dep_fetch` runs
-`apply-local-patches`; `git apply -R --check` skips already-applied patches).
+`apply-local-patches`; `patch -p1 -R --dry-run` skips already-applied patches).
+Patches are applied with **GNU `patch`** (bundled with Git for Windows at
+`<Git>\usr\bin\patch.exe`, which `findPatch()` in `scripts/build/tools.ts`
+locates) — not `git apply --no-index`, which silently no-ops on
+Git-for-Windows 2.49 (exits 0 without applying, leaving deps unpatched).
 
 ### Symbol Export
 
