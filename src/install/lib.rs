@@ -792,7 +792,12 @@ impl RunCommand {
                 // Under Stacked Borrows a `*const` derived via `Deref::deref`
                 // is invalidated by the intervening `&mut` from `IndexMut`, so
                 // re-derive `as_ptr()` at each FFI call site instead of caching.
-                if win::CreateHardLinkW(target_path_buffer.as_ptr(), image_path.as_ptr(), None) == 0
+                // CreateHardLinkW is a kernel32 Win32-path API: it rejects the
+                // `\??\` NT-object prefix (ERROR_INVALID_NAME on XP), so pass
+                // the buffer past the prefix. mkdir_w below still uses the
+                // NT-prefixed path (it goes through NtCreateFile).
+                let win32_ptr = unsafe { target_path_buffer.as_ptr().add(prefix.len()) };
+                if win::CreateHardLinkW(win32_ptr, image_path.as_ptr(), None) == 0
                 {
                     match win::Win32Error::get() {
                         win::Win32Error::ALREADY_EXISTS => {}
@@ -806,7 +811,7 @@ impl RunCommand {
                             target_path_buffer[dir_slice_len] = b'\\' as u16;
 
                             if win::CreateHardLinkW(
-                                target_path_buffer.as_ptr(),
+                                win32_ptr,
                                 image_path.as_ptr(),
                                 None,
                             ) == 0

@@ -760,13 +760,21 @@ void us_internal_socket_after_open(struct us_socket_t *s, int error) {
                 }
                 case WSAEOPNOTSUPP: {
                     /* MSG_PUSH_IMMEDIATE is Vista+. On XP recv() rejects the
-                     * flag with WSAEOPNOTSUPP, which would turn every
-                     * successful non-blocking connect into a spurious
-                     * failure. The flag is only an optimization to surface an
-                     * aborted connection immediately; on XP fall back to
-                     * assuming the connect succeeded (a plain 0-byte recv
-                     * would report WSAEWOULDBLOCK, handled above). */
-                    error = 0;
+                     * flag with WSAEOPNOTSUPP before checking connection state,
+                     * so we can't use it to verify the connect. Read the real
+                     * result from SO_ERROR instead: 0 = connected, WSAEWOULDBLOCK
+                     * = still in progress, anything else = the connect failed
+                     * (e.g. WSAEADDRNOTAVAIL when an IPv6 candidate can't be
+                     * routed). Without this, a failed candidate was reported as
+                     * connected and the TLS handshake's ClientHello send then
+                     * failed with WSAEALREADY forever. */
+                    int soerr = 0;
+                    socklen_t soerrlen = sizeof(soerr);
+                    if (getsockopt(us_poll_fd((struct us_poll_t*)s), SOL_SOCKET, SO_ERROR, (char*)&soerr, &soerrlen) == 0 && soerr != 0 && soerr != WSAEWOULDBLOCK) {
+                        error = soerr;
+                    } else {
+                        error = 0;
+                    }
                     break;
                 }
                 default: {
