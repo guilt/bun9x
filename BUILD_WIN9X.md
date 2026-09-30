@@ -71,8 +71,8 @@ rustup component add rust-src --toolchain nightly-2026-07-20
 # rustup toolchain link creates a symlink; the build machine instead uses
 # NTFS junctions so the toolchain can be relocated freely:
 #   rust9x      -> %EXTDEV%\Rust9x\<arch>  (distributed toolchain)
-#   rust9x-msvc -> D:\WS\Rust9x-Rust\build\x86_64-pc-windows-msvc\stage2
-# %EXTDEV% / $env:EXTDEV is the "External Development Tools" root (D:\WS\EXTDEV),
+#   rust9x-msvc -> <rust9x source checkout>\build\x86_64-pc-windows-msvc\stage2
+# %EXTDEV% / $env:EXTDEV is the "External Development Tools" root,
 # a shared tree of third-party toolchains (GCC/MinGW, Python, CMake, the rust9x
 # distribution). Arch-specific tools live in an arch-qualified subfolder:
 # the rust9x dist is at %EXTDEV%\Rust9x\<arch>, where <arch> is the HOST's
@@ -578,7 +578,7 @@ The fix (all in `src/win/poll.c`):
 Verified on XP: repeated `fetch()` runs of 2–5 MB HTTP/HTTPS bodies
 (favicon/models.dev/cachefly, plain + TLS) pass with exit 0 and no fatal
 poll callbacks; benign WSAENOTSOCK with `events=0` remains but is swallowed.
-See `D:\WS\OpenCode\BUILD_WIN9X.md` §7 for the end-to-end OpenCode check.
+See the OpenCode repo's `BUILD_WIN9X.md` §7 for the end-to-end OpenCode check.
 
 **Regenerating the patch:** `vendor/libuv` is a generated tree (edits are lost
 on refetch), so change the patch file, not the vendor copy. The patch baseline
@@ -682,7 +682,7 @@ so **no companion stub DLL is required**. Deploy:
 |----------|---------|
 | `BUN_WEBKIT_PATH` | Path to a WebKit checkout (default `vendor/WebKit/`); lets several worktrees share one clone. |
 | `BUN_ICU_PATH` | Path to an ICU 78.3 source root (default `vendor/icu/icu4c/source`); mirrors `BUN_WEBKIT_PATH`. |
-| `EXTDEV` | External-tools root (`D:\WS\EXTDEV`); rust9x toolchain junction target. |
+| `EXTDEV` | External-tools root (a shared third-party tools tree of your choosing); rust9x toolchain junction target. |
 | `MAKEFLAGS` | **Removed** by `build-icu.ps1` at runtime — Git's env sets `j23`, which NMAKE rejects (`U1065`). |
 | `PATH` | Needs `py` on PATH (Python 3 for the ICU data build; the `py.cmd` shim in `%EXTDEV%\Bin` selects the interpreter by `-3`/`-3.x`/`-2`/`-2.x` selector or the AUTOEXEC `PYTHON*_HOME`/`PYTHON*_VERSION` variables). If clang/llvm tools fail to be found outside the VS dev shell, prepend `C:\Program Files\LLVM\bin`. **You no longer need to add Git's `usr\bin` to `PATH` for perl** — the build auto-detects it and prepends it to `PATH` for the codegen, `dep_configure`, and `dep_build` rules (see Reproducibility below). |
 | `VSINSTALLDIR` | Set by running inside a VS developer shell (x64). `scripts/build.ts` auto-re-execs if unset. |
