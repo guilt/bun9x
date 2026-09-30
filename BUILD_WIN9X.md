@@ -725,6 +725,17 @@ embedded, so no `js/` directory is needed either. The Win8+ API set symbols
 so **no companion stub DLL is required**. Deploy:
 `scp -O bun-debug.exe <user>@KVK-Retro-PC.local:Bun/`.
 
+### npm `.bin` exe stubs fail under scripts (XP)
+
+`bun add`/`bun install` links Windows bins as 8 KB native shims
+(`node_modules\.bin\<bin>.exe` plus a `<bin>.bunx` target file). On XP,
+spawning one from a `package.json` script fails with an empty
+`bun: unknown error: ` (exit 1), and invoking one directly hangs.
+`bun x <bin>` works — bun resolves and runs the target itself — so use
+`bun x` for ad-hoc bins on XP. The bun-node shim dir
+(`%TEMP%\bun-node-*`, `node` → `bun.exe`) is unaffected: `node <file>`
+inside scripts works.
+
 ### Build Environment Variables
 
 | Variable | Purpose |
