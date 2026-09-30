@@ -300,7 +300,9 @@ Windows 8+ API set DLLs (`api-ms-win-core-synch-l1-2-0.dll`, `bcryptprimitives.d
   - `GetCurrentThreadStackLimits` → reads the TEB (FS:[8]/FS:[4]); must be
     `VOID __stdcall` per the SDK decl
   - `GetFinalPathNameByHandleW` → passthrough to real kernel32 when available,
-    else `NtQueryObject` + `QueryDosDeviceW` emulation
+    else `NtQueryObject` + `QueryDosDeviceW` emulation (XP returns device names
+    with a single leading backslash, not the doubled form; the emulated result
+    must report the length excluding the trailing NUL per the API's ABI)
   - `GetTickCount64`, `GetSystemTimePreciseAsFileTime`, `inet_pton`,
     `InitializeConditionVariable`, `CreateEventEx`, `CreateFile2`, etc.
   - `GetAddrInfoW`/`FreeAddrInfoW` → serviced over XP's ANSI
@@ -511,6 +513,36 @@ Patches are applied with **GNU `patch`** (bundled with Git for Windows at
 `<Git>\usr\bin\patch.exe`, which `findPatch()` in `scripts/build/tools.ts`
 locates) — not `git apply --no-index`, which silently no-ops on
 Git-for-Windows 2.49 (exits 0 without applying, leaving deps unpatched).
+
+### XP networking, installer, and rename fixes
+
+- **usockets connect checks (`packages/bun-usockets/src/context.c`)**: the
+  non-blocking-connect probe was `recv(fd, NULL, 0, MSG_PUSH_IMMEDIATE)`.
+  That flag is Vista+, so on XP every probe returned `WSAEOPNOTSUPP` and a
+  **successful** connect was reported as refused ("ConnectionRefused" /
+  "Unable to connect"). Treating the error as OK wasn't enough either: a
+  genuinely **failed** candidate (e.g. `WSAEADDRNOTAVAIL` for an unroutable
+  IPv6 address) then read as connected, the TLS handshake attached to a dead
+  socket, and its `ClientHello` retried with `WSAEALREADY` forever — HTTPS
+  fetches and `bun add` against the npm registry hung. Connect status is now
+  read from `SO_ERROR` instead of the flag-limited probe.
+- **usockets read loop (`src/loop.c`)**: same flag, same failure — `recv`
+  with `MSG_PUSH_IMMEDIATE` returned `WSAEOPNOTSUPP` on XP, so every socket
+  read failed and incoming data never arrived (fetch/install hung right
+  after connect). The OS version is detected once and XP falls back to
+  `MSG_DONTWAIT` (supported on all Windows); Vista+ keeps
+  `MSG_PUSH_IMMEDIATE`.
+- **bun-node shim hardlink (`src/install/lib.rs`)**: `CreateHardLinkW` is a
+  kernel32 Win32-path API and rejects the `\\??\\` NT-object prefix with
+  `ERROR_INVALID_NAME` on XP, so the `node` → `bun.exe` hardlink was never
+  created — `node` was unresolvable on PATH and `bun x` silently failed to
+  run cached bins. The prefix is stripped before the call (Win11 had
+  normalized it away, which is why this only surfaced on XP).
+- **file rename (`src/sys/windows/mod.rs`)**: `FileRenameInformationEx` /
+  `FILE_RENAME_POSIX_SEMANTICS` require Windows 10 rs1+; XP's
+  `NtSetInformationFile` fails them with `STATUS_INVALID_PARAMETER`. The
+  legacy `FILE_RENAME_INFORMATION` (class 10, `ReplaceIfExists`) is used
+  instead — valid on all Windows versions.
 
 ### libuv: XP slow-select poll fix (`patches/libuv/win-poll-slow-select-xp.patch`)
 
