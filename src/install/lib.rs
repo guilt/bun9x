@@ -794,8 +794,8 @@ impl RunCommand {
                 // re-derive `as_ptr()` at each FFI call site instead of caching.
                 // CreateHardLinkW is a kernel32 Win32-path API: it rejects the
                 // `\??\` NT-object prefix (ERROR_INVALID_NAME on XP), so pass
-                // the buffer past the prefix. mkdir_w below still uses the
-                // NT-prefixed path (it goes through NtCreateFile).
+                // the buffer past the prefix. mkdir_w below is CreateDirectoryW
+                // (also Win32) — it needs the prefix-stripped path too.
                 let win32_ptr = unsafe { target_path_buffer.as_ptr().add(prefix.len()) };
                 if win::CreateHardLinkW(win32_ptr, image_path.as_ptr(), None) == 0
                 {
@@ -804,9 +804,13 @@ impl RunCommand {
                         _ => {
                             target_path_buffer[dir_slice_len] = 0;
                             // SAFETY: `dir_slice_len` is in-bounds; the byte at
-                            // `dir_slice_len` was just set to NUL.
-                            let dir_w =
-                                bun_core::WStr::from_buf(&target_path_buffer[..], dir_slice_len);
+                            // `dir_slice_len` was just set to NUL. Slice from
+                            // past the `\??\` prefix: relative index
+                            // `dir_slice_len - prefix.len()` lands on that NUL.
+                            let dir_w = bun_core::WStr::from_buf(
+                                &target_path_buffer[prefix.len()..],
+                                dir_slice_len - prefix.len(),
+                            );
                             let _ = bun_sys::mkdir_w(dir_w);
                             target_path_buffer[dir_slice_len] = b'\\' as u16;
 

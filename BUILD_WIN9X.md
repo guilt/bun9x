@@ -578,12 +578,15 @@ Git-for-Windows 2.49 (exits 0 without applying, leaving deps unpatched).
   after connect). The OS version is detected once and XP falls back to
   `MSG_DONTWAIT` (supported on all Windows); Vista+ keeps
   `MSG_PUSH_IMMEDIATE`.
-- **bun-node shim hardlink (`src/install/lib.rs`)**: `CreateHardLinkW` is a
-  kernel32 Win32-path API and rejects the `\\??\\` NT-object prefix with
-  `ERROR_INVALID_NAME` on XP, so the `node` → `bun.exe` hardlink was never
-  created — `node` was unresolvable on PATH and `bun x` silently failed to
-  run cached bins. The prefix is stripped before the call (Win11 had
-  normalized it away, which is why this only surfaced on XP).
+- **bun-node shim creation (`src/install/lib.rs`)**: two Win32-path API calls
+  reject the `\\??\\` NT-object prefix with `ERROR_INVALID_NAME` on XP, so the
+  `%TEMP%\\bun-node-*` dir was never created and the `node` → `bun.exe`
+  hardlink was never made — `node` was unresolvable on PATH and `bun x`
+  silently failed to run cached bins. `CreateHardLinkW` **and** the mkdir
+  retry (`mkdir_w` is `CreateDirectoryW`, not NtCreateFile) are passed the
+  path past the prefix (Win11 had normalized it away, which is why this only
+  surfaced on XP). Verified on XP: `bun run` scripts resolve `node`, and
+  `node <file>` executes through the bun node wrapper.
 - **file rename (`src/sys/windows/mod.rs`)**: `FileRenameInformationEx` /
   `FILE_RENAME_POSIX_SEMANTICS` require Windows 10 rs1+; XP's
   `NtSetInformationFile` fails them with `STATUS_INVALID_PARAMETER`. The
