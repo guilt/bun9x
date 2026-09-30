@@ -473,6 +473,13 @@ fetched/checked out, on top of any `patches:` entries listed in the dep's
 `scripts/build/deps/<dep>.ts`. Because auto-discovery is unconditional, these
 patches are applied for every profile that builds the dep from source.
 
+This is distinct from **declared per-dep patches**: a dep's `patches:` array in
+`scripts/build/deps/<dep>.ts` lists `patches/<dep>/*.patch`, which are applied
+in array order before any `vendor-patches/<dep>/` extras. Use a declared patch
+when the fix should be visible in the dep's spec (and reviewed/updated together
+with it); use `vendor-patches/` for local-only build tweaks (e.g. vendored-fork
+pruning that shouldn't ride in a dep spec).
+
 `vendor-patches/WebKit/` (the `local` WebKit the win9x profiles use):
 - `build-icu-78.patch` — point the ICU source build at the release-78.3 tarball
 - `DOMWrapperWorld.h.patch` — strip WebCore DOM wrapper deps
@@ -504,6 +511,67 @@ Patches are applied with **GNU `patch`** (bundled with Git for Windows at
 `<Git>\usr\bin\patch.exe`, which `findPatch()` in `scripts/build/tools.ts`
 locates) — not `git apply --no-index`, which silently no-ops on
 Git-for-Windows 2.49 (exits 0 without applying, leaving deps unpatched).
+
+### libuv: XP slow-select poll fix (`patches/libuv/win-poll-slow-select-xp.patch`)
+
+XP always takes libuv's **slow select-thread poll path** for the win poller
+(the fast AFD path needs `WSA_FLAG_NO_HANDLE_INHERIT`, which is Vista+), and
+the upstream slow path has two bugs there:
+
+- `uv__poll_set` spawned a select thread **per submitted req** regardless of
+  what it was watching, so two threads could `select()` the same socket
+  concurrently (e.g. a disconnect-only req submitted right before a combined
+  one). XP's `select()` then returns **WSAEINVAL (10022)** on the perfectly
+  healthy socket; `uv_translate_sys_error` turns it into `UV_EINVAL (-4071)`,
+  usockets error-closes the socket, and the fetch dies with
+  "The socket connection was closed unexpectedly" (observed as
+  `Failed to fetch models.dev` on XP).
+- A disconnect-only interest (`events` with no `UV_READABLE|UV_WRITABLE`)
+  still spawned a thread even though `select()` cannot observe it; XP reports
+  WSAENOTSOCK (10038) for those once the handle is gone.
+
+The fix (all in `src/win/poll.c`):
+
+1. `uv__poll_set` slow branch only spawns threads when
+   `(UV_READABLE | UV_WRITABLE) & ~already_submitted` is non-empty (the fast
+   AFD/`uv__fast_poll_*` path is unchanged).
+2. `uv__slow_poll_process_poll_req` applies the same R/W-mask recheck on
+   completion.
+3. The select thread proc completes immediately when the fd set is empty, and
+   retries a bounded number of times (with a `SO_TYPE` liveness probe) on
+   WSAEINVAL for a still-live socket instead of erroring the req; the error is
+   reported via `SET_REQ_ERROR(req, sel_err)` so it reaches the req that was
+   actually waited on (the old code wrote into `handle->poll_req_1`).
+
+Verified on XP: repeated `fetch()` runs of 2–5 MB HTTP/HTTPS bodies
+(favicon/models.dev/cachefly, plain + TLS) pass with exit 0 and no fatal
+poll callbacks; benign WSAENOTSOCK with `events=0` remains but is swallowed.
+See `D:\WS\OpenCode\BUILD_WIN9X.md` §7 for the end-to-end OpenCode check.
+
+**Regenerating the patch:** `vendor/libuv` is a generated tree (edits are lost
+on refetch), so change the patch file, not the vendor copy. The patch baseline
+(pristine libuv + the two older libuv patches) hashes to
+`361b0fcf2b90f3e913506d5a76c8dcfbf1d077e8`; regenerate with:
+
+```sh
+# 1. extract pristine src/win/poll.c from the libuv tarball
+#    (%USERPROFILE%\.bun\build-cache\tarballs\libuv-*.tar.gz), apply
+#    win-poll-rearm-before-callback.patch + win-poll-abort-with-disconnect.patch
+#    to get the baseline, and hash it.
+# 2. diff baseline against vendor/libuv/src/win/poll.c with the RIGHT patch:
+#    PATH's `patch` may be Beyond Compare's Patch.exe (corrupts diffs/CRLF) —
+#    use "C:\Program Files\Git\usr\bin\patch.exe".
+# 3. normalize a/a/src -> a/src, b/b/src -> b/src in the diff headers.
+# 4. verify: apply all three patches to a fresh extract and hash-compare to
+#    vendor/libuv/src/win/poll.c.
+# Apply byte-faithfully via cmd redirect (PowerShell string piping mangles
+# UTF-8): cmd /c "patch.exe -p1 --batch < file", and capture diffs the same
+# way (cmd /c "git diff --no-index a b > out.patch").
+```
+
+Delete `vendor/libuv/.ref` after editing the patch to force a refetch +
+re-apply, then rebuild and confirm the log prints all three
+`[libuv] applying ...` lines.
 
 ### Symbol Export
 

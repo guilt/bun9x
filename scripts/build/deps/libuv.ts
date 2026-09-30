@@ -49,7 +49,19 @@ export const libuv: Dependency = {
   // an in-process loopback fetch().abort() can fall into. To upstream:
   // send to libuv/libuv with the wepoll/ReactOS references in the patch
   // comment as the rationale.
-  patches: ["patches/libuv/win-poll-rearm-before-callback.patch", "patches/libuv/win-poll-abort-with-disconnect.patch"],
+  //
+  // win-poll-slow-select-xp.patch: on XP the fast AFD poll is unavailable
+  // (WSA_FLAG_NO_HANDLE_INHERIT), so libuv falls back to the select() slow
+  // path. It spawned a select thread per submitted req (two could poll one
+  // socket concurrently — XP returns WSAEINVAL and the fetch died) and also
+  // spawned threads for disconnect-only interest, which select() cannot
+  // observe. Only READABLE|WRITABLE spawn threads, empty interest completes
+  // immediately, and a live-socket WSAEINVAL retries instead of erroring.
+  patches: [
+    "patches/libuv/win-poll-rearm-before-callback.patch",
+    "patches/libuv/win-poll-abort-with-disconnect.patch",
+    "patches/libuv/win-poll-slow-select-xp.patch",
+  ],
 
   build: () => ({
     kind: "direct",

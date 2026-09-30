@@ -1,0 +1,89 @@
+diff --git a/src/win/poll.c b/src/win/poll.c
+index 361b0fc..8a9eddc 100644
+--- a/src/win/poll.c
++++ b/src/win/poll.c
+@@ -298,12 +298,14 @@ static DWORD WINAPI uv__slow_poll_thread_proc(void* arg) {
+   uv_poll_t* handle = (uv_poll_t*) req->data;
+   unsigned char reported_events;
+   int r;
++  int tries = 0;
+   uv_single_fd_set_t rfds, wfds, efds;
+   struct timeval timeout;
+ 
+   assert(handle->type == UV_POLL);
+   assert(req->type == UV_POLL_REQ);
+ 
++ retry:
+   if (handle->events & UV_READABLE) {
+     rfds.fd_count = 1;
+     rfds.fd_array[0] = handle->socket;
+@@ -321,6 +323,15 @@ static DWORD WINAPI uv__slow_poll_thread_proc(void* arg) {
+     efds.fd_count = 0;
+   }
+ 
++  /* select() cannot observe DISCONNECT/PRIORITIZED; complete empty interest
++   * right away (uv__poll_set only spawns threads for READABLE|WRITABLE). */
++  if (rfds.fd_count == 0 && wfds.fd_count == 0) {
++    SET_REQ_SUCCESS(req);
++    req->u.io.overlapped.InternalHigh = 0;
++    POST_COMPLETION_FOR_REQ(handle->loop, req);
++    return 0;
++  }
++
+   /* Make the select() time out after 3 minutes. If select() hangs because the
+    * user closed the socket, we will at least not hang indefinitely. */
+   timeout.tv_sec = 3 * 60;
+@@ -329,7 +340,20 @@ static DWORD WINAPI uv__slow_poll_thread_proc(void* arg) {
+   r = select(1, (fd_set*) &rfds, (fd_set*) &wfds, (fd_set*) &efds, &timeout);
+   if (r == SOCKET_ERROR) {
+     /* Queue this req, reporting an error. */
+-    SET_REQ_ERROR(&handle->poll_req_1, WSAGetLastError());
++    DWORD sel_err = WSAGetLastError();
++    /* XP's select() returns WSAEINVAL while another thread polls the same
++     * socket; retry while the socket is alive instead of tearing down. */
++    if (sel_err == WSAEINVAL && tries < 100 && handle->events != 0) {
++      int probe = 0;
++      int plen = (int) sizeof probe;
++      if (getsockopt(handle->socket, SOL_SOCKET, SO_TYPE, (char*) &probe,
++                     &plen) == 0) {
++        Sleep(10);
++        tries++;
++        goto retry;
++      }
++    }
++    SET_REQ_ERROR(req, sel_err);
+     POST_COMPLETION_FOR_REQ(handle->loop, req);
+     return 0;
+   }
+@@ -423,8 +447,10 @@ static void uv__slow_poll_process_poll_req(uv_loop_t* loop, uv_poll_t* handle,
+     }
+   }
+ 
+-  if ((handle->events & ~(handle->submitted_events_1 |
+-      handle->submitted_events_2)) != 0) {
++  /* select() only watches READABLE/WRITABLE: never spawn a thread for
++   * disconnect-only interest (it would race the next R/W submit). */
++  if ((handle->events & (UV_READABLE | UV_WRITABLE) &
++      ~(handle->submitted_events_1 | handle->submitted_events_2)) != 0) {
+     uv__slow_poll_submit_poll_req(loop, handle);
+   } else if ((handle->flags & UV_HANDLE_CLOSING) &&
+              handle->submitted_events_1 == 0 &&
+@@ -530,12 +556,13 @@ static int uv__poll_set(uv_poll_t* handle, int events, uv_poll_cb cb) {
+   uv__handle_start(handle);
+   submitted_events = handle->submitted_events_1 | handle->submitted_events_2;
+ 
+-  if (handle->events & ~submitted_events) {
+-    if (handle->flags & UV_HANDLE_POLL_SLOW) {
++  if (handle->flags & UV_HANDLE_POLL_SLOW) {
++    /* Slow (select) path: only READABLE|WRITABLE can be watched; fast/AFD
++     * keeps full events so disconnect-only interest still arms there. */
++    if (handle->events & (UV_READABLE | UV_WRITABLE) & ~submitted_events)
+       uv__slow_poll_submit_poll_req(handle->loop, handle);
+-    } else {
+-      uv__fast_poll_submit_poll_req(handle->loop, handle);
+-    }
++  } else if (handle->events & ~submitted_events) {
++    uv__fast_poll_submit_poll_req(handle->loop, handle);
+   }
+ 
+   return 0;
