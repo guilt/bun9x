@@ -13,8 +13,10 @@ below so a fresh machine can be set up.
 
 ### Managed (via `%EXTDEV%` or shell aliases)
 
-- **Rust `rust9x` cross toolchain** — lives in `%EXTDEV%\Rust9x\<arch>` and is
-  linked into rustup via an NTFS junction (`~\.rustup\toolchains\rust9x`).
+- **Rust `rust9x` cross toolchain** — built from
+  [`guilt/rust9x`](https://github.com/guilt/rust9x) (see Toolchain Setup
+  below); the distribution lives in `%EXTDEV%\Rust9x\<arch>` and is linked
+  into rustup via an NTFS junction (`~\.rustup\toolchains\rust9x`).
   This is the forked Rust that targets i586/9x.
 - **Python 3** — `%EXTDEV%\Python38\` and a `py.cmd` shim in
   `%EXTDEV%\Bin\py.cmd` (tracked copy at `misctools\py.cmd`). The shim is
@@ -59,6 +61,25 @@ below so a fresh machine can be set up.
 
 ## Toolchain Setup
 
+### Environment roots
+
+Two environment variables define where shared tools and sources live. Set them
+once (user or machine scope, e.g. `setx`) — every path in this document is
+either expressed through them, or relative to the repo:
+
+| Variable | Purpose |
+|----------|---------|
+| `EXTDEV` | External Development Tools **binaries** root: MinGW, Python, CMake, LLVM, and the rust9x distribution (`%EXTDEV%\Rust9x\<PROCESSOR_ARCHITECTURE>`). Required. |
+| `RUST9X_SRC` | The rust9x **source** checkout (the `Rust9x-Rust` clone of the repo below). Only needed to build or update the toolchain. |
+
+```powershell
+# Example — any locations you like; new shells pick setx values up:
+setx EXTDEV "C:\Tools\EXTDEV"
+setx RUST9X_SRC "C:\src\Rust9x-Rust"
+```
+
+### Host toolchain (LLVM + nightly)
+
 ```powershell
 # Install LLVM (provides clang-cl, lld-link, llvm-lib)
 # Install from https://github.com/llvm/llvm-project/releases
@@ -67,20 +88,45 @@ below so a fresh machine can be set up.
 rustup toolchain install nightly-2026-07-20
 rustup component add rust-src --toolchain nightly-2026-07-20
 
-# Register the rust9x cross-compiler (the Rust fork that targets 9x/XP).
-# rustup toolchain link creates a symlink; the build machine instead uses
-# NTFS junctions so the toolchain can be relocated freely:
-#   rust9x      -> %EXTDEV%\Rust9x\<arch>  (distributed toolchain)
-#   rust9x-msvc -> <rust9x source checkout>\build\x86_64-pc-windows-msvc\stage2
-# %EXTDEV% / $env:EXTDEV is the "External Development Tools" root,
-# a shared tree of third-party toolchains (GCC/MinGW, Python, CMake, the rust9x
-# distribution). Arch-specific tools live in an arch-qualified subfolder:
-# the rust9x dist is at %EXTDEV%\Rust9x\<arch>, where <arch> is the HOST's
-# $env:PROCESSOR_ARCHITECTURE (AMD64, ARM64, ...).
-rustup toolchain link rust9x $env:EXTDEV/Rust9x/$env:PROCESSOR_ARCHITECTURE
-
 # Clone WebKit source
 git clone https://github.com/oven-sh/WebKit vendor/WebKit/
+```
+
+### The rust9x cross-compiler
+
+Bun's win9x profiles compile Rust with **rust9x** — an unofficial "tier 4"
+Rust fork targeting Windows 9x/Me/NT/2000/XP/Vista:
+<https://github.com/guilt/rust9x> (branch `rust9x`). The fork's
+`BUILDING_RUST9X.md` is the authoritative guide; the short version:
+
+```powershell
+# 1. Clone. Prereqs: Python 3.6+, CMake 3.20+, Git, rustup, and VS2022
+#    (open an "x64 Native Tools Command Prompt"; VS2026 has a known bug).
+git clone --branch rust9x https://github.com/guilt/rust9x $env:RUST9X_SRC
+cd $env:RUST9X_SRC
+
+# 2. Configure + build LLVM, stage1, stage2, and the std libs for all
+#    targets (~20-40 min). bootstrap.msvc.example.toml also cross-compiles
+#    the GNU/MinGW targets; see BUILDING_RUST9X.md for those variants.
+copy bootstrap.msvc.example.toml bootstrap.toml
+python x.py build --stage 2
+
+# 3. Install the distribution: stage2 is a standard rustc prefix
+#    (bin\rustc.exe, lib\rustlib\...); copy its contents into the
+#    arch-qualified EXTDEV folder so one EXTDEV serves AMD64 and ARM64
+#    hosts (robocopy exit codes 0-7 all mean success).
+robocopy build\x86_64-pc-windows-msvc\stage2 "$env:EXTDEV\Rust9x\$env:PROCESSOR_ARCHITECTURE" /E
+
+# 4. Register with rustup (NTFS junctions under ~\.rustup\toolchains\, so
+#    the toolchains can be relocated freely):
+#      rust9x      -> the EXTDEV distribution (what bun's build uses)
+#      rust9x-msvc -> the raw stage2 (for iterating on the compiler)
+rustup toolchain link rust9x $env:EXTDEV\Rust9x\$env:PROCESSOR_ARCHITECTURE
+rustup toolchain link rust9x-msvc $env:RUST9X_SRC\build\x86_64-pc-windows-msvc\stage2
+
+# 5. Verify
+rustc +rust9x --version
+rustc +rust9x --target i586-rust9x-windows-msvc --print cfg
 ```
 
 If the `rust9x` toolchain junction breaks (its target was moved), re-create it:
@@ -682,7 +728,8 @@ so **no companion stub DLL is required**. Deploy:
 |----------|---------|
 | `BUN_WEBKIT_PATH` | Path to a WebKit checkout (default `vendor/WebKit/`); lets several worktrees share one clone. |
 | `BUN_ICU_PATH` | Path to an ICU 78.3 source root (default `vendor/icu/icu4c/source`); mirrors `BUN_WEBKIT_PATH`. |
-| `EXTDEV` | External-tools root (a shared third-party tools tree of your choosing); rust9x toolchain junction target. |
+| `EXTDEV` | External Development Tools binaries root (required; see Prerequisites and Toolchain Setup): MinGW, Python, CMake, LLVM, and the rust9x distribution (`Rust9x\<PROCESSOR_ARCHITECTURE>`) that the `rust9x` rustup junction points at. |
+| `RUST9X_SRC` | Source checkout of `guilt/rust9x` (the `Rust9x-Rust` clone). Only needed to build/update the rust9x toolchain; the build itself uses the `rust9x` rustup toolchain. |
 | `MAKEFLAGS` | **Removed** by `build-icu.ps1` at runtime — Git's env sets `j23`, which NMAKE rejects (`U1065`). |
 | `PATH` | Needs `py` on PATH (Python 3 for the ICU data build; the `py.cmd` shim in `%EXTDEV%\Bin` selects the interpreter by `-3`/`-3.x`/`-2`/`-2.x` selector or the AUTOEXEC `PYTHON*_HOME`/`PYTHON*_VERSION` variables). If clang/llvm tools fail to be found outside the VS dev shell, prepend `C:\Program Files\LLVM\bin`. **You no longer need to add Git's `usr\bin` to `PATH` for perl** — the build auto-detects it and prepends it to `PATH` for the codegen, `dep_configure`, and `dep_build` rules (see Reproducibility below). |
 | `VSINSTALLDIR` | Set by running inside a VS developer shell (x64). `scripts/build.ts` auto-re-execs if unset. |
