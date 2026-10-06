@@ -725,16 +725,42 @@ embedded, so no `js/` directory is needed either. The Win8+ API set symbols
 so **no companion stub DLL is required**. Deploy:
 `scp -O bun-debug.exe <user>@KVK-Retro-PC.local:Bun/`.
 
-### npm `.bin` exe stubs fail under scripts (XP)
+### npm `.bin` exe stubs (XP) — FIXED, verified on XP
 
-`bun add`/`bun install` links Windows bins as 8 KB native shims
-(`node_modules\.bin\<bin>.exe` plus a `<bin>.bunx` target file). On XP,
-spawning one from a `package.json` script fails with an empty
-`bun: unknown error: ` (exit 1), and invoking one directly hangs.
-`bun x <bin>` works — bun resolves and runs the target itself — so use
-`bun x` for ad-hoc bins on XP. The bun-node shim dir
-(`%TEMP%\bun-node-*`, `node` → `bun.exe`) is unaffected: `node <file>`
-inside scripts works.
+`bun add`/`bun install` links Windows bins as ~7 KB native shims
+(`node_modules\.bin\<bin>.exe` plus a `<bin>.bunx` metadata file). This
+stack of fixes makes them work end-to-end on XP (previously: x64 stub
+rejected by the XP loader, then `0xC0000139`, then spawn failures):
+
+- **i386 rust9x shim build** (`scripts/build/rust.ts`): the shim links with
+  the `build` cargo subcommand, skips `-Zbuild-std*`/`-Zunstable-options`
+  (no rust-src for rust9x), keeps `RUSTC` in the env, and links
+  `/SUBSYSTEM:CONSOLE,5.1` so the PE reports OS/Subsystem 5.1. Spawn
+  failures now throw instead of silently continuing.
+- **Freestanding libcalls** (`src/install/windows-shim/main.rs`): rust9x
+  targets get `_chkstk`, `memcpy`, `memset` defined as naked functions
+  (COFF i386 prefixes `_`; `/NODEFAULTLIB` + the non-mem
+  `compiler_builtins` leave them otherwise undefined). Registered
+  `cfg(target_family, values("rust9x"))` in the workspace `check-cfg`.
+- **`ExitProcess`, not `RtlExitUserProcess`**: XP's ntdll does not export
+  `RtlExitUserProcess`, so the loader aborted with `STATUS_ENTRYPOINT_NOT_FOUND`
+  (0xC0000139) before any shim code ran. The shim now imports
+  `kernel32!ExitProcess` (verified all 11 imports resolve on XP).
+- **bun-node shim cross-volume fix** (`src/install/lib.rs`): the node shim
+  (`%TEMP%\bun-node-*`, `node` → `bun.exe`) hardlinked with
+  `CreateHardLinkW`, which fails `ERROR_NOT_SAME_DEVICE` when bun.exe is on
+  another drive and previously reported success anyway; it now falls back to
+  `CopyFileW`.
+
+XP verification (all exit 0): `bun --version`, `bun add cowsay`, direct
+`.bin` stub run, `bun run c` (script → `.bin` stub → cow), `bun run n`
+(node shim, prints `NODE-FILE-OK`), `bun x cowsay`.
+
+**XP test harness gotchas** (bats, not bun bugs): the XP `PATH` starts with
+`.` (so bare `bun` only resolves when cwd is the directory containing
+`bun.exe` — prepend the bun dir to `PATH` in test bats); batch files must be
+CRLF; avoid `powershell.exe` in bats over ssh (PowerShell 2 hangs at exit
+with a redirected session) — use pure `cmd`.
 
 ### Build Environment Variables
 
