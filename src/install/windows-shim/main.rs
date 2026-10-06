@@ -125,6 +125,88 @@ pub(crate) extern "C" fn __chkstk() {
     );
 }
 
+/// i586 rust9x: COFF i386 prefixes C symbols with `_`, so the link-visible
+/// `__chkstk` comes from declaring `_chkstk`. Size in `eax`; callee installs
+/// the adjusted `esp`. Body verbatim from `compiler_builtins` `src/x86.rs`.
+#[cfg(all(windows, target_family = "rust9x"))]
+#[unsafe(no_mangle)]
+#[unsafe(naked)]
+pub(crate) extern "C" fn _chkstk() {
+    core::arch::naked_asm!(
+        "push   ecx",
+        "cmp    eax, 0x1000",
+        "lea    ecx, [esp + 8]",
+        "jb     3f",
+        "2:",
+        "sub    ecx, 0x1000",
+        "test   [ecx], ecx",
+        "sub    eax, 0x1000",
+        "cmp    eax, 0x1000",
+        "ja     2b",
+        "3:",
+        "sub    ecx, eax",
+        "test   [ecx], ecx",
+        "lea    eax, [esp + 4]",
+        "mov    esp, ecx",
+        "mov    ecx, [eax - 4]",
+        "push   [eax]",
+        "sub    eax, esp",
+        "ret",
+    );
+}
+
+/// `memcpy`/`memset` libcalls: `/NODEFAULTLIB` + the prebuilt non-mem
+/// `compiler_builtins` leaves them undefined. Naked cdecl bodies (a Rust
+/// body would recurse); the runtime-signature lint dictates the signatures.
+#[cfg(all(windows, target_family = "rust9x"))]
+#[unsafe(no_mangle)]
+#[unsafe(naked)]
+pub(crate) unsafe extern "C" fn memcpy(
+    _dest: *mut core::ffi::c_void,
+    _src: *const core::ffi::c_void,
+    _n: usize,
+) -> *mut core::ffi::c_void {
+    core::arch::naked_asm!(
+        "mov    eax, [esp + 4]",
+        "mov    ecx, [esp + 12]",
+        "mov    edx, [esp + 8]",
+        "push   esi",
+        "push   edi",
+        "mov    esi, edx",
+        "mov    edi, eax",
+        "cld",
+        "rep    movsb",
+        "pop    edi",
+        "pop    esi",
+        "ret",
+    );
+}
+
+/// See [`memcpy`] — same gate, same rationale.
+#[cfg(all(windows, target_family = "rust9x"))]
+#[unsafe(no_mangle)]
+#[unsafe(naked)]
+pub(crate) unsafe extern "C" fn memset(
+    _dst: *mut core::ffi::c_void,
+    _c: i32,
+    _n: usize,
+) -> *mut core::ffi::c_void {
+    core::arch::naked_asm!(
+        "mov    eax, [esp + 4]",
+        "mov    ecx, [esp + 12]",
+        "mov    edx, [esp + 8]",
+        "push   eax",
+        "push   edi",
+        "mov    edi, eax",
+        "mov    eax, edx",
+        "cld",
+        "rep    stosb",
+        "pop    edi",
+        "pop    eax",
+        "ret",
+    );
+}
+
 /// PE entry point (named via `-C link-arg=/ENTRY:shim_main` in the build
 /// script — bypasses `mainCRTStartup` and the CRT entirely). The launcher
 /// reads its arguments / image path straight from the TEB→PEB process
@@ -143,14 +225,14 @@ pub(crate) extern "C" fn shim_main() -> ! {
 #[cfg(windows)]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
-    // Declared locally as `safe fn` (the `bun_windows_sys::ntdll` re-export
-    // is not yet `safe`-qualified): no memory-safety preconditions — by-value
-    // `u32`, diverges. Matches `ExitProcess`, already `safe fn` upstream.
-    #[link(name = "ntdll")]
+    // kernel32 ExitProcess, not ntdll RtlExitUserProcess: XP's ntdll has no
+    // such export (loader fails with 0xC0000139). Declared as `safe fn`: no
+    // preconditions — by-value `u32`, diverges.
+    #[link(name = "kernel32")]
     unsafe extern "system" {
-        safe fn RtlExitUserProcess(ExitStatus: u32) -> !;
+        safe fn ExitProcess(ExitStatus: u32) -> !;
     }
-    RtlExitUserProcess(255)
+    ExitProcess(255)
 }
 
 // Non-Windows: the build system only ever builds this crate for

@@ -820,7 +820,12 @@ impl RunCommand {
                                 None,
                             ) == 0
                             {
-                                return Ok(());
+                                // Cross-volume TEMP rejects hardlinks (ERROR_NOT_SAME_DEVICE);
+                                // copy instead so the shim works when bun.exe is on another drive.
+                                // SAFETY: NUL-terminated wide strings; same preconditions as above.
+                                if unsafe { win::CopyFileW(image_path.as_ptr(), win32_ptr, 0) } == 0 {
+                                    return Ok(());
+                                }
                             }
                         }
                     }

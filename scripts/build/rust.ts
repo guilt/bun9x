@@ -785,10 +785,13 @@ rustflags.push("-Cllvm-args=-asan-globals=0");
     // compile to a bare `ud2`/`brk` with no `core::fmt::Arguments` payload —
     // that machinery is otherwise the bulk of `.text`. Nightly + `rust-src`
     // are guaranteed by `rust-toolchain.toml`.
-    // Shim must run on the BUILD host (e.g. x86_64 when cross-compiling for
-    // i586). Use the host rust triple so cargo produces a host-native PE.
-    const shimTriple = triple === "i586-rust9x-windows-gnu" ? (cfg.host.rustTriple ?? triple) : triple;
+    // The shim runs on the TARGET machine: `bun install` writes it into
+    // node_modules/.bin at runtime there (i586 also runs under WoW64 on x64
+    // hosts, so target-native is never worse than a host-native PE).
+    const shimTriple = triple;
+    const isRust9x = triple.includes("rust9x");
     const shimArgs: string[] = [
+      "build",
       "-p",
       "bun_shim_impl",
       "--bin",
@@ -801,8 +804,11 @@ rustflags.push("-Cllvm-args=-asan-globals=0");
       shimTriple,
       "--profile",
       "shim",
-      "-Zbuild-std=core,compiler_builtins",
-      "-Zbuild-std-features=compiler-builtins-mem",
+      // rust9x has no rust-src (prebuilt sysroot), so build-std — and with
+      // it the panic_immediate_abort feature set above — is unavailable.
+      ...(isRust9x
+        ? []
+        : ["-Zbuild-std=core,compiler_builtins", "-Zbuild-std-features=compiler-builtins-mem"]),
     ];
     const shimSrc = resolve(targetDir, shimTriple, "shim", "bun_shim_impl.exe");
     // Same env minus the main build's CARGO_ENCODED_RUSTFLAGS — the shim has
@@ -814,7 +820,8 @@ rustflags.push("-Cllvm-args=-asan-globals=0");
     //   - `/ENTRY:shim_main`      — bypass the CRT (`mainCRTStartup`) entirely;
     //                               the launcher reads argv from TEB→PEB itself.
     //   - `/SUBSYSTEM:CONSOLE`    — link.exe can't infer subsystem without a
-    //                               recognised entry symbol.
+    //                               recognised entry symbol; `,5.1` (rust9x)
+    //                               is the XP-max subsystem/OS version.
     //   - `/NODEFAULTLIB`         — don't pull msvcrt/vcruntime/ucrt; the only
     //                               imports are kernel32 + ntdll (named via
     //                               `#[link]` on the externs).
@@ -822,16 +829,16 @@ rustflags.push("-Cllvm-args=-asan-globals=0");
     // (`-Cforce-unwind-tables=no` would drop `.pdata`, but the
     // `*-windows-msvc` target spec sets `requires_uwtable: true` so rustc
     // rejects it. The section is ~3 KiB; not worth a custom target JSON.)
-    const { CARGO_ENCODED_RUSTFLAGS: _, RUSTC: _2, ...shimEnv } = env;
+    const { CARGO_ENCODED_RUSTFLAGS: _, ...shimEnv } = env;
     shimEnv.CARGO_ENCODED_RUSTFLAGS = [
       // `panic = "immediate-abort"` is the new (nightly ≥ 2025-12) spelling of
       // the old `-Zbuild-std-features=panic_immediate_abort`: every panic call
       // (incl. core::fmt-carrying assert/unreachable/unwrap) compiles to a
-      // bare trap with no `Arguments` payload.
-      "-Zunstable-options",
-      "-Cpanic=immediate-abort",
+      // bare trap with no `Arguments` payload. Skipped for rust9x, whose
+      // prebuilt `core` was compiled with a different panic strategy.
+      ...(isRust9x ? [] : ["-Zunstable-options", "-Cpanic=immediate-abort"]),
       "-Clink-arg=/ENTRY:shim_main",
-      "-Clink-arg=/SUBSYSTEM:CONSOLE",
+      `-Clink-arg=/SUBSYSTEM:CONSOLE${isRust9x ? ",5.1" : ""}`,
       "-Clink-arg=/NODEFAULTLIB",
       "-Clink-arg=kernel32.lib",
       "-Clink-arg=ntdll.lib",
@@ -874,28 +881,27 @@ rustflags.push("-Cllvm-args=-asan-globals=0");
     });
     // Build the shim at configure time (synchronous) to avoid the
     // "ReadFile: The handle is invalid" ninja+cargo pipe clash on Windows.
-    const shimCargoArgs = [...shimArgs];
-    // cargo doesn't accept --profile shim on stable; use --release equivalent.
-    // The shim profile in Cargo.toml has `inherits = "release"` + overrides.
-    try {
-      const shimResult = spawnSync(cfg.cargo, shimCargoArgs, {
-        cwd: cfg.cwd,
-        env: { ...process.env, ...shimEnv },
-        stdio: "pipe",
-        encoding: "utf8",
-        maxBuffer: 1024 * 1024,
-      });
-      // Copy the built exe to the source tree if different.
-      if (existsSync(shimSrc)) {
-        const shimDestExists = existsSync(shimDest);
-        const needsCopy = !shimDestExists || readFileSync(shimSrc) !== readFileSync(shimDest);
-        if (needsCopy) {
-          cpSync(shimSrc, shimDest);
-          console.log(`[shim] updated`);
-        }
-      }
-    } catch {
-      console.error(`[shim] build failed, will retry via ninja`);
+    // The ninja `rust_shim` rule above is a placeholder — this is the only
+    // real build path, so a failure must stop configure rather than embed
+    // a stale PE via the unconditional stamp below.
+    const shimResult = spawnSync(cfg.cargo, [...shimArgs], {
+      cwd: cfg.cwd,
+      env: { ...process.env, ...shimEnv },
+      stdio: "pipe",
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+    });
+    if (shimResult.status !== 0 || !existsSync(shimSrc)) {
+      console.error(
+        `[shim] cargo build failed (exit ${shimResult.status}):\n${shimResult.stdout ?? ""}${shimResult.stderr ?? ""}`,
+      );
+      throw new Error("bun_shim_impl build failed");
+    }
+    // Content-conditional copy: bytes-equal must not bump the destination's
+    // mtime, or `include_bytes!` dep-info recompiles bun_install every build.
+    if (!existsSync(shimDest) || !readFileSync(shimSrc).equals(readFileSync(shimDest))) {
+      cpSync(shimSrc, shimDest);
+      console.log(`[shim] updated`);
     }
     // Touch stamp so ninja doesn't retry the shim edge.
     if (!existsSync(dirname(shimStamp))) mkdirSync(dirname(shimStamp), { recursive: true });

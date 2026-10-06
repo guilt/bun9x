@@ -184,8 +184,9 @@ warnings = { level = "deny", priority = -1 }
 # `bun_asan` / `bun_debug` / `socket_fault_injection` are set via RUSTFLAGS
 # (`--cfg=...` + `--check-cfg=cfg(...)`) by scripts/build/rust.ts; register
 # them here so a plain `cargo build` / `cargo check` (without those flags)
-# doesn't warn.
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(bun_asan)', 'cfg(bun_debug)', 'cfg(socket_fault_injection)'] }
+# doesn't warn. `target_family = "rust9x"` (custom i586 win9x target spec)
+# must likewise be known when checking non-rust9x targets.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(bun_asan)', 'cfg(bun_debug)', 'cfg(socket_fault_injection)', 'cfg(target_family, values("rust9x"))'] }
 # link.exe unconditionally prints "Creating library X.dll.lib and object
 # X.dll.exp" to stdout when linking each proc-macro DLL on Windows hosts;
 # there is no linker flag to suppress it. The lint already exempts itself

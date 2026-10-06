@@ -86,21 +86,6 @@ mod nt {
     /// https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile
     pub(super) use w::ntdll::NtCreateFile;
 
-    // SAFETY: ntdll syscalls; signatures match WDK headers. Declared locally as
-    // `safe fn` (vs. re-exporting the `unsafe fn` from `w::ntdll`) because
-    // neither has memory-safety preconditions: all arguments are by-value,
-    // `HANDLE` is an opaque kernel token validated kernel-side (bad handle →
-    // `STATUS_INVALID_HANDLE`, not UB), and `RtlExitUserProcess` diverges
-    // (matches `ExitProcess`, already `safe fn` in `bun_windows_sys`). This
-    // freestanding `no_std` shim owns every handle it closes; no
-    // `OwnedHandle`-style I/O-safety invariant exists to violate.
-    // RtlExitUserProcess is NOT in XP's ntdll; provided by our C++ stubs.
-    // Declared without #[link] so linker resolves from our .obj not ntdll.lib.
-    unsafe extern "system" {
-        /// undocumented
-        pub(super) safe fn RtlExitUserProcess(ExitStatus: u32) -> !;
-    }
-
     #[link(name = "ntdll")]
     unsafe extern "system" {
         /// https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntclose
@@ -154,6 +139,8 @@ mod k32 {
     pub(super) use w::kernel32::CreateProcessW;
     /// https://learn.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-getlasterror
     pub(super) use w::kernel32::GetLastError;
+    // Not `ntdll!RtlExitUserProcess`: XP's ntdll doesn't export it (9x neither).
+    pub(super) use w::kernel32::ExitProcess;
 
     // SAFETY: kernel32 externs; signatures match SDK. Declared locally as
     // `safe fn` (vs. re-exporting `unsafe fn` from `w::kernel32`) because
@@ -418,7 +405,7 @@ fn fail_and_exit_with_reason(reason: FailReason) -> ! {
         }
     }
 
-    nt::RtlExitUserProcess(255)
+    k32::ExitProcess(255)
 }
 
 const NT_OBJECT_PREFIX: [u16; 4] = ['\\' as u16, '?' as u16, '?' as u16, '\\' as u16];
@@ -1527,8 +1514,8 @@ fn launcher<const MODE: LauncherMode, Ctx: BunCtx>(bun_ctx: Ctx) -> LauncherRet 
             let _ = nt::NtClose(process.hProcess);
             let _ = nt::NtClose(process.hThread);
 
-            nt::RtlExitUserProcess(exit_code);
-            // unreachable - RtlExitUserProcess does not return
+            k32::ExitProcess(exit_code);
+            // unreachable - ExitProcess does not return
         }
     }
     unreachable!("above loop should not exit");
