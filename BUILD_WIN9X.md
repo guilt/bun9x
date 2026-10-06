@@ -553,6 +553,9 @@ pruning that shouldn't ride in a dep spec).
 `vendor-patches/mimalloc/`:
 - `rtlgenrandom.patch` — XP-safe secure randomness in the direct mimalloc build
 
+`vendor-patches/libuv/` (after the two declared `patches/libuv/` patches):
+- `win-poll-slow-select-xp.patch` — XP slow-select poll fixes (see below)
+
 These are applied automatically during the build (`dep_fetch` runs
 `apply-local-patches`; `patch -p1 -R --dry-run` skips already-applied patches).
 Patches are applied with **GNU `patch`** (bundled with Git for Windows at
@@ -593,7 +596,7 @@ Git-for-Windows 2.49 (exits 0 without applying, leaving deps unpatched).
   legacy `FILE_RENAME_INFORMATION` (class 10, `ReplaceIfExists`) is used
   instead — valid on all Windows versions.
 
-### libuv: XP slow-select poll fix (`patches/libuv/win-poll-slow-select-xp.patch`)
+### libuv: XP slow-select poll fix (`vendor-patches/libuv/win-poll-slow-select-xp.patch`)
 
 XP always takes libuv's **slow select-thread poll path** for the win poller
 (the fast AFD path needs `WSA_FLAG_NO_HANDLE_INHERIT`, which is Vista+), and
