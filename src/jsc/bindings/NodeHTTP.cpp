@@ -639,11 +639,11 @@ extern "C" void NodeHTTP_setUsingCustomExpectHandler(bool is_ssl, void* uws_app,
     }
 }
 
-extern "C" EncodedJSValue NodeHTTPResponse__createForJS(size_t any_server, JSC::JSGlobalObject* globalObject, bool* hasBody, uWS::HttpRequest* request, int isSSL, void* response_ptr, void* upgrade_ctx, void** nodeHttpResponsePtr);
+extern "C" EncodedJSValue NodeHTTPResponse__createForJS(uint64_t any_server, JSC::JSGlobalObject* globalObject, bool* hasBody, uWS::HttpRequest* request, int isSSL, void* response_ptr, void* upgrade_ctx, void** nodeHttpResponsePtr);
 
 template<bool isSSL>
 static EncodedJSValue NodeHTTPServer__onRequest(
-    size_t any_server,
+    uint64_t any_server,
     Zig::GlobalObject* globalObject,
     JSValue thisValue,
     JSValue callback,
@@ -1087,7 +1087,7 @@ extern "C" bool NodeHTTPServer__writeHead_https(
 }
 
 extern "C" EncodedJSValue NodeHTTPServer__onRequest_http(
-    size_t any_server,
+    uint64_t any_server,
     Zig::GlobalObject* globalObject,
     EncodedJSValue thisValue,
     EncodedJSValue callback,
@@ -1110,7 +1110,7 @@ extern "C" EncodedJSValue NodeHTTPServer__onRequest_http(
 }
 
 extern "C" EncodedJSValue NodeHTTPServer__onRequest_https(
-    size_t any_server,
+    uint64_t any_server,
     Zig::GlobalObject* globalObject,
     EncodedJSValue thisValue,
     EncodedJSValue callback,

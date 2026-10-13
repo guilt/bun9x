@@ -474,6 +474,22 @@ Windows 8+ API set DLLs (`api-ms-win-core-synch-l1-2-0.dll`, `bcryptprimitives.d
   (`int cast`). That made every `Bun.spawn` with piped stdio crash.
   `ReturnCodeI64` now wraps `isize` (pointer-width, matches `intptr_t` on both
   platforms) and call sites feeding `i64`/`i32`-typed params cast explicitly.
+- **`node:http` `any_server` FFI width on 32-bit**: the C++ request handlers
+  (`NodeHTTPServer__onRequest_{http,https}` and the `NodeHTTPResponse__createForJS`
+  decl in `NodeHTTP.cpp`) declared the packed server tag as `size_t` — 4 bytes
+  on win32 — while the Rust FFI defined the same params as `u64`. On x64
+  `size_t` == `u64` so the mismatch was invisible; on i586 every cdecl
+  argument after `any_server` shifted by one slot, so Rust's `request` param
+  received C++'s `isSSL` (= 0) and every incoming request dereferenced a
+  NULL uws handle, panicking with `opaque_deref: null FFI handle` before the
+  JS callback ran (any `node:http.createServer` request crashed the process;
+  `Bun.serve` was unaffected). Two tag-truncation bugs compounded it:
+  `AnyServer::to_packed()` went through `TaggedPtr::to()`, which bit-casts
+  through `*mut c_void` (4 bytes on i586) and dropped the 15-bit variant tag
+  in bits 49..64, and the cached `any_server_packed` field / FFI params were
+  `usize`. C++ now uses `uint64_t` throughout, Rust uses `u64` end-to-end,
+  and `to_packed()` uses `TaggedPtr::as_u64()` (same bug class as the
+  tagged-pointer ext-slot fix in `50dc1213cc5`).
 - **JIT/WASM options for i586**: WebKit forces `useWasmIPInt`/`useBBQJIT` off
   on non-x86-64/ARM64, so enabling WASM makes `assertOptionsAreCoherent()`
   crash at startup. `ZigGlobalObject.cpp`'s `JSC::initialize` callback now

@@ -249,7 +249,9 @@ pub struct NewServer<const SSL: bool, const DEBUG: bool> {
     /// request to reconstruct `AnyServer`; it's a pure function of the (stable)
     /// heap address and the const variant tag, so cache it rather than
     /// recompute `AnyServer::from(self).to_packed()` in the per-request prologue.
-    pub any_server_packed: usize,
+    /// `u64` (not `usize`): the packed tag lives in bits 49..64, which a
+    /// 4-byte `usize` on i586 would truncate away.
+    pub any_server_packed: u64,
     /// Lazily-filled cache of the interned JS method-name string per HTTP
     /// method token. The `node:http` request prologue reads this so each request
     /// after the first for a given method skips the FFI hop into
@@ -2081,7 +2083,7 @@ impl<const SSL: bool, const DEBUG: bool> NewServer<SSL, DEBUG> {
         // `TaggedPtr::init`.
         // SAFETY: `server` is the freshly-boxed `*mut Self`; uniquely owned here.
         unsafe {
-            (*server).any_server_packed = AnyServer::from(server.cast_const()).to_packed() as usize;
+            (*server).any_server_packed = AnyServer::from(server.cast_const()).to_packed();
         }
 
         // The bake options (and the arena that backs `root`) live in
@@ -3354,7 +3356,7 @@ mod ffi {
         /// preconditions; `request`/`response`/`upgrade_ctx` are opaque uws
         /// handles (module-private — sole caller passes live pointers).
         pub(super) safe fn NodeHTTPServer__onRequest_http(
-            any_server: usize,
+            any_server: u64,
             global: &jsc::JSGlobalObject,
             this_value: jsc::JSValue,
             callback: jsc::JSValue,
@@ -3366,7 +3368,7 @@ mod ffi {
         ) -> jsc::JSValue;
 
         pub(super) safe fn NodeHTTPServer__onRequest_https(
-            any_server: usize,
+            any_server: u64,
             global: &jsc::JSGlobalObject,
             this_value: jsc::JSValue,
             callback: jsc::JSValue,
@@ -3687,8 +3689,10 @@ impl AnyServer {
             AnyServerTag::DebugHTTPServer => 1022,
             AnyServerTag::DebugHTTPSServer => 1021,
         };
-        // `TaggedPtr::to()` bit-casts the full packed word through `*mut c_void`.
-        bun_ptr::TaggedPtr::init(self.ptr, tag).to() as u64
+        // `TaggedPtr::as_u64()` — NOT `.to() as u64`: `to()` bit-casts through
+        // `*mut c_void`, which is 4 bytes on i586 and would drop the tag
+        // (bits 49..64) before the widening cast.
+        bun_ptr::TaggedPtr::init(self.ptr, tag).as_u64()
     }
 
     /// Shared borrow of the process-static VM. Routes through
