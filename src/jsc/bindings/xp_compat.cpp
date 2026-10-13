@@ -113,26 +113,41 @@ BOOLEAN __stdcall TryAcquireSRWLockShared(PSRWLOCK SRWLock) {
     return TryEnterCriticalSection(xp_srwCS(SRWLock));
 }
 
-// -- Condition Variables (Vista+) -- emulate with Event --
+// -- Condition Variables (Vista+) -- emulate with a semaphore --
 //
 // Windows CONDITION_VARIABLEs are designed to be zero-initialized and to
 // self-initialize on first use (WTF's ThreadCondition never calls
-// InitializeConditionVariable). Our emulation stores a HANDLE in the 4-byte
-// slot, so a zeroed CONDITION_VARIABLE has a NULL handle -> WAIT_FAILED with
-// ERROR_INVALID_HANDLE. Lazy-create the event on first use instead.
+// InitializeConditionVariable). The 4-byte slot holds a pointer to a
+// heap-allocated object (x86) with the semaphore and waiter count.
+//
+// A semaphore, not a manual-reset event: a never-reset event makes every
+// SleepConditionVariable* after the first wake return instantly, turning
+// every waiter (libuv threadpool, WTF conditions) into a 100% CPU busy
+// loop. Waiters are counted while the caller still holds the associated
+// lock so a concurrent WakeAll sees them; stale permits from wakes with
+// no waiters surface as a bounded number of spurious returns, which
+// condition-variable callers already tolerate (they recheck the predicate).
 
-struct xp_condvar { volatile LONG evt; };
+struct xp_cv_obj { HANDLE sem; volatile LONG waiters; };
 
-static HANDLE xp_cv_ensure(xp_condvar* cv) {
-    if (cv->evt)
-        return (HANDLE)(intptr_t)cv->evt;
-    HANDLE ne = CreateEventW(0, TRUE, FALSE, 0);
-    LONG old = _InterlockedCompareExchange(&cv->evt, (LONG)(intptr_t)ne, 0);
+struct xp_condvar { volatile LONG obj; };
+
+static xp_cv_obj* xp_cv_ensure(xp_condvar* cv) {
+    LONG p = cv->obj;
+    if (p)
+        return (xp_cv_obj*)p;
+    xp_cv_obj* n = (xp_cv_obj*)HeapAlloc(GetProcessHeap(), 0, sizeof(xp_cv_obj));
+    if (!n)
+        return 0;
+    n->sem = CreateSemaphoreW(0, 0, 0x7FFFFFFF, 0);
+    n->waiters = 0;
+    LONG old = _InterlockedCompareExchange(&cv->obj, (LONG)(intptr_t)n, 0);
     if (old) {
-        CloseHandle(ne);
-        return (HANDLE)(intptr_t)old;
+        CloseHandle(n->sem);
+        HeapFree(GetProcessHeap(), 0, n);
+        return (xp_cv_obj*)old;
     }
-    return ne;
+    return n;
 }
 
 void __stdcall InitializeConditionVariable(PCONDITION_VARIABLE CondVar) {
@@ -140,23 +155,32 @@ void __stdcall InitializeConditionVariable(PCONDITION_VARIABLE CondVar) {
 }
 
 void __stdcall WakeConditionVariable(PCONDITION_VARIABLE CondVar) {
-    auto* cv = (xp_condvar*)CondVar;
-    if (cv->evt)
-        SetEvent((HANDLE)(intptr_t)cv->evt);
+    xp_cv_obj* o = xp_cv_ensure((xp_condvar*)CondVar);
+    if (o)
+        ReleaseSemaphore(o->sem, 1, 0);
 }
 
 void __stdcall WakeAllConditionVariable(PCONDITION_VARIABLE CondVar) {
-    auto* cv = (xp_condvar*)CondVar;
-    if (cv->evt)
-        SetEvent((HANDLE)(intptr_t)cv->evt);
+    xp_cv_obj* o = xp_cv_ensure((xp_condvar*)CondVar);
+    if (!o)
+        return;
+    LONG n = o->waiters;
+    ReleaseSemaphore(o->sem, n > 0 ? n : 1, 0);
 }
 
 BOOL __stdcall SleepConditionVariableCS(PCONDITION_VARIABLE CondVar, PCRITICAL_SECTION CriticalSection, DWORD dwMilliseconds) {
-    auto* cv = (xp_condvar*)CondVar;
-    HANDLE evt = xp_cv_ensure(cv);
+    xp_cv_obj* o = xp_cv_ensure((xp_condvar*)CondVar);
+    if (!o) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+    _InterlockedIncrement(&o->waiters);
     LeaveCriticalSection(CriticalSection);
-    DWORD res = WaitForSingleObject(evt, dwMilliseconds);
+    DWORD res = WaitForSingleObject(o->sem, dwMilliseconds);
+    _InterlockedDecrement(&o->waiters);
     EnterCriticalSection(CriticalSection);
+    if (res == WAIT_TIMEOUT)
+        SetLastError(ERROR_TIMEOUT);
     return res == WAIT_OBJECT_0;
 }
 

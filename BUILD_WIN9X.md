@@ -442,8 +442,17 @@ Windows 8+ API set DLLs (`api-ms-win-core-synch-l1-2-0.dll`, `bcryptprimitives.d
   as a `PCRITICAL_SECTION` made `EnterCriticalSection` write at address 0x20.
   And Windows CONDITION_VARIABLEs are zero-initialized and **self-initialize
   on first use** (WTF's `ThreadCondition` never calls
-  `InitializeConditionVariable`), so the emulation now lazy-creates its event
+  `InitializeConditionVariable`), so the emulation lazy-creates its state
   with `InterlockedCompareExchange` instead of requiring an explicit init.
+  The state is a heap object holding a **semaphore** (not the earlier
+  manual-reset event) plus a waiter count: a never-reset event made every
+  `SleepConditionVariable*` after the first wake return instantly, turning
+  every waiter (libuv threadpool, WTF conditions) into a 100%-CPU busy
+  loop. `WakeAll` releases one permit per counted waiter (waiters counted
+  while the caller still holds the associated lock); stale permits from
+  wakes with no waiters surface as a bounded number of spurious returns,
+  which condition-variable callers already tolerate (they recheck the
+  predicate).
 - **`xp_compat.cpp` `GetQueuedCompletionStatusEx` stub drops failed
   completions**: the XP/win9x fallback (XP lacks the real API) emulated
   GQCSEx by looping over `GetQueuedCompletionStatus`. When an OVERLAPPED
